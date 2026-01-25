@@ -46,9 +46,9 @@ Ultimately, I decided to go back to the source-centric approach. I applied the k
 ## 4. Result
 
 The final result is a Unity plugin that renders a visualization for real-time audio propagation. It maps sound directly onto the environment's geometry, allowing players to see sound bouncing through doorways or around obstacles.
-![[showcase1.png]]
-![[showcase2.png]]
-![[showcase3.png]]
+![[images/showcase1.png]]
+![[images/showcase2.png]]
+![[images/showcase3.png]]
 ### 4.1 How it works
 
 1. **Source Registry:** First, retrieve the position of all active sound sources that are within the listening distance.
@@ -66,7 +66,7 @@ The plugin is designed as a simple "drop-in" tool for developers.
 - After importing the package, a **Tools** section should appear in the top toolbar menu. Use the custom _Setup Audio Sources_ script to automatically attach tracking components to all existing audio sources.
 - Attach the imported __RaytracedAudioVisualizer__ prefab onto the listener.
 
-![[install.png]]
+![[images/install.png]]
 ### 4.3 Settings
 The script attached to the **RaytracedAudioVisualizer** prefab allows you to modify how the visualizations look and behave. 
 
@@ -80,7 +80,7 @@ The available settings are:
 - **Dot Material** - The material used to render the visual cues. (By default uses custom shader included in the package)
 - **Max Dot Capacity** - The maximum number of visual indicators that can be rendered simultaneously.
 - **Show Debug Gizmos** - Toggles debug lines in the Scene View to visualize the path of the rays.
-![[settings.png]]
+![[images/settings.png]]
 ## 5. Limitations and future extensions
 
 While the prototype functions well as a proof of concept, there are several areas I would like to improve in the future.
