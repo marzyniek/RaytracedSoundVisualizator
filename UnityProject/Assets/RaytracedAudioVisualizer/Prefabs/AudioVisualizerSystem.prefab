@@ -1,0 +1,57 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &7576389196345457306
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7668938857572737467}
+  - component: {fileID: 1573714781554384523}
+  m_Layer: 0
+  m_Name: AudioVisualizerSystem
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &7668938857572737467
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7576389196345457306}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: -0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1573714781554384523
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7576389196345457306}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fba2c3b64baa7d049a5ffb020b691fff, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::RaytracedAudioVisualizerPlugin.RaytracedAudioVisualizer
+  obstacleMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  scanRadius: 50
+  rayCount: 100
+  maxBounces: 3
+  bounceEnergyLossMultiplier: 0.8
+  dotMesh: {fileID: 10210, guid: 0000000000000000e000000000000000, type: 0}
+  dotMaterial: {fileID: 2100000, guid: 97cd5c3823eab5e41a93d2c52e426f01, type: 2}
+  maxDotCapacity: 200000
+  showDebugGizmos: 0
