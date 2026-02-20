@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using UnityEngine;
@@ -10,6 +11,13 @@ namespace RaytracedAudioVisualizerPlugin
 {
     public class RaytracedAudioVisualizer : MonoBehaviour
     {
+        public enum RayState
+        {
+            Forward, // Normal ray flying through the air
+            ResolvingPenetration, // Ray is currently shooting backwards to find the exit hole
+            Dead // Ray has run out of energy or hit a dead end
+        }
+
         [Header("Settings")] [SerializeField] private LayerMask obstacleMask;
         [SerializeField] private float scanRadius = 50f;
         [SerializeField] private float maxRayLength = 50f;
@@ -29,12 +37,14 @@ namespace RaytracedAudioVisualizerPlugin
 
         [SerializeField] private List<LayerAcousticConfig> layerConfigs = new();
         private readonly uint[] _args = new uint[5] { 0, 0, 0, 0, 0 };
+
+        private readonly List<DebugLine> _debugLines = new();
         private ComputeBuffer _argsBuffer;
         private int _bufferHeadIndex;
 
-        private readonly List<DebugLine> _debugLines = new();
-
         private ComputeBuffer _dotBuffer;
+
+        private NativeArray<int> _expectedColliderIDs;
 
         private Material _instancedMaterial;
         private DotData[] _localDataBuffer;
@@ -43,6 +53,9 @@ namespace RaytracedAudioVisualizerPlugin
 
         private NativeArray<RaycastCommand> _probeCommands;
         private NativeArray<RaycastHit> _probeResults;
+        private NativeArray<float> _rayEnergies;
+
+        private NativeArray<RayState> _rayStates;
 
         private void Awake()
         {
@@ -64,6 +77,8 @@ namespace RaytracedAudioVisualizerPlugin
             _argsBuffer?.Release();
             if (_probeCommands.IsCreated) _probeCommands.Dispose();
             if (_probeResults.IsCreated) _probeResults.Dispose();
+            if (_rayStates.IsCreated) _rayStates.Dispose();
+            if (_rayEnergies.IsCreated) _rayEnergies.Dispose();
             if (_nativeLayerData.IsCreated) _nativeLayerData.Dispose();
             if (_instancedMaterial) Destroy(_instancedMaterial);
         }
@@ -88,6 +103,9 @@ namespace RaytracedAudioVisualizerPlugin
 
             for (var i = 0; i < maxDotCapacity; i++) _localDataBuffer[i].startTime = -999f;
             _dotBuffer.SetData(_localDataBuffer);
+
+            _rayStates = new NativeArray<RayState>(rayCount, Allocator.Persistent);
+            _rayEnergies = new NativeArray<float>(rayCount, Allocator.Persistent);
 
             _probeCommands = new NativeArray<RaycastCommand>(rayCount, Allocator.Persistent);
             _probeResults = new NativeArray<RaycastHit>(rayCount, Allocator.Persistent);
@@ -159,6 +177,11 @@ namespace RaytracedAudioVisualizerPlugin
             var stepCommands = new List<NativeArray<RaycastCommand>>();
             var stepResults = new List<NativeArray<RaycastHit>>();
 
+            var allColliders = FindObjectsByType<Collider>(FindObjectsSortMode.None);
+            var colliderToLayerMap = new NativeParallelHashMap<int, int>(allColliders.Length, Allocator.TempJob);
+
+            foreach (var col in allColliders) colliderToLayerMap.TryAdd(col.GetInstanceID(), col.gameObject.layer);
+
             for (var depth = 0; depth <= maxBounces; depth++)
             {
                 NativeArray<RaycastCommand> commands;
@@ -169,6 +192,9 @@ namespace RaytracedAudioVisualizerPlugin
                     for (var i = 0; i < rayCount; i++)
                     {
                         var dir = Random.onUnitSphere;
+
+                        _rayStates[i] = RayState.Forward;
+                        _rayEnergies[i] = 1.0f;
 
                         _probeCommands[i] =
                             new RaycastCommand(sources[i % sources.Count].position, dir, queryParams, maxRayLength);
@@ -185,33 +211,22 @@ namespace RaytracedAudioVisualizerPlugin
                     var prevResults = stepResults[depth - 1];
                     var prevCommands = stepCommands[depth - 1];
 
-                    for (var i = 0; i < rayCount; i++)
+                    var bounceJob = new ProcessBounceJob
                     {
-                        var hit = prevResults[i];
+                        previousHits = prevResults,
+                        previousCommands = prevCommands,
+                        layerData = _nativeLayerData, // Assuming you initialized this in Step 1 of the previous answer
+                        colliderToLayerMap = colliderToLayerMap,
+                        randomSeed = (uint)(Random.Range(1, 100000) + depth * 100),
+                        maxThickness = maxExpectedWallThickness, // Pass your max thickness variable here
+                        queryParams = queryParams,
+                        bounceEnergyLossMultiplier = bounceEnergyLossMultiplier,
+                        rayStates = _rayStates,
+                        rayEnergies = _rayEnergies,
+                        nextCommands = commands
+                    };
 
-                        if (hit.collider == null)
-                        {
-                            commands[i] = new RaycastCommand();
-                            continue;
-                        }
-
-                        var incomingDir = prevCommands[i].direction;
-                        var reflectDir = Vector3.Reflect(incomingDir, hit.normal);
-
-                        var remainingDist = prevCommands[i].distance - hit.distance;
-                        if (remainingDist <= 0.01f)
-                        {
-                            commands[i] = new RaycastCommand();
-                            continue;
-                        }
-
-                        commands[i] = new RaycastCommand(
-                            hit.point + hit.normal * 0.02f,
-                            reflectDir,
-                            queryParams,
-                            remainingDist
-                        );
-                    }
+                    bounceJob.Schedule(rayCount, 32).Complete();
                 }
 
                 var handle = RaycastCommand.ScheduleBatch(commands, results, 32);
@@ -220,6 +235,8 @@ namespace RaytracedAudioVisualizerPlugin
                 stepCommands.Add(commands);
                 stepResults.Add(results);
             }
+
+            colliderToLayerMap.Dispose();
 
             var uploadCount = 0;
             var startIndex = _bufferHeadIndex;
@@ -248,8 +265,7 @@ namespace RaytracedAudioVisualizerPlugin
                         });
                     }
 
-                    var energy = Mathf.Clamp(1f - Vector3.Distance(src.position, hit.point) / src.range, 0f, 1f);
-                    energy = MathF.Pow(bounceEnergyLossMultiplier, d) * energy;
+                    var energy = _rayEnergies[i];
                     var intensity = Mathf.Clamp(1f - Vector3.Distance(src.position, transform.position) / src.range,
                         0.1f, 1f);
                     if (energy <= 0.05f) continue;
@@ -360,43 +376,102 @@ namespace RaytracedAudioVisualizerPlugin
             public float attenuation;
         }
 
+        [BurstCompile]
         public struct ProcessBounceJob : IJobParallelFor
         {
             [ReadOnly] public NativeArray<RaycastHit> previousHits;
             [ReadOnly] public NativeArray<RaycastCommand> previousCommands;
             [ReadOnly] public NativeArray<LayerAcousticData> layerData;
+            [ReadOnly] public NativeParallelHashMap<int, int> colliderToLayerMap;
 
-            public Unity.Mathematics.Random randomizer;
+            public uint randomSeed;
             public float maxThickness;
-
             public QueryParameters queryParams;
+            public float bounceEnergyLossMultiplier; // Pass this in to handle standard bounce loss!
 
+            public NativeArray<RayState> rayStates;
+            public NativeArray<float> rayEnergies;
             [WriteOnly] public NativeArray<RaycastCommand> nextCommands;
 
             public void Execute(int index)
             {
-                var hit = previousHits[index];
-                var prevCmd = previousCommands[index];
-
-                if (hit.colliderInstanceID == 0) // Did not hit anything
+                var state = rayStates[index];
+                if (state == RayState.Dead)
                 {
                     nextCommands[index] = new RaycastCommand();
                     return;
                 }
 
-                // 1. Look up the acoustic properties for the layer we just hit
-                var layer = 0; // Note: In a real implementation, you need a way to pass the layer. 
-                // Since RaycastHit in jobs doesn't easily expose the layer directly without a collider reference, 
-                // you might need to map colliderInstanceIDs to layers via a concurrent dictionary, 
-                // OR use a unified layer for obstacles and vary properties by a different metric.
-                // For simplicity, assuming we got the layer index:
+                var hit = previousHits[index];
+                var prevCmd = previousCommands[index];
 
-                var material = layerData[layer];
+                // 1. RESOLVING PENETRATION (Handling the backcast result)
+                if (state == RayState.ResolvingPenetration)
+                {
+                    if (hit.colliderInstanceID != 0)
+                    {
+                        // We found the exit hole!
+                        // Thickness is the max distance we shot backward MINUS the distance it took to hit the backface.
+                        var thickness = maxThickness - hit.distance;
 
-                // 2. Stochastic Decision: Reflect or Penetrate?
+                        // Lookup layer to get attenuation
+                        var layer = 3;
+                        if (colliderToLayerMap.TryGetValue(hit.colliderInstanceID, out var foundLayer))
+                            layer = foundLayer;
+                        var attenuation = layerData[layer].attenuation;
+
+                        // Reduce energy based on thickness
+                        rayEnergies[index] -= thickness * attenuation;
+
+                        if (rayEnergies[index] <= 0.05f)
+                        {
+                            rayStates[index] = RayState.Dead;
+                            nextCommands[index] = new RaycastCommand();
+                            return;
+                        }
+
+                        // Fire the NEXT forward ray from the exit hole, continuing in the original direction
+                        // Note: We use -prevCmd.direction because the previous command was shooting backwards
+                        nextCommands[index] = new RaycastCommand(
+                            hit.point + -prevCmd.direction * 0.02f,
+                            -prevCmd.direction,
+                            queryParams,
+                            maxThickness // Give it some distance to clear the wall completely
+                        );
+
+                        rayStates[index] = RayState.Forward; // Back to normal
+                    }
+                    else
+                    {
+                        // Wall was too thick (backcast never hit anything). Kill the ray.
+                        rayStates[index] = RayState.Dead;
+                        nextCommands[index] = new RaycastCommand();
+                    }
+
+                    return;
+                }
+
+                // 2. STANDARD FORWARD HIT
+                if (hit.colliderInstanceID == 0 || prevCmd.distance - hit.distance <= 0.01f)
+                {
+                    rayStates[index] = RayState.Dead;
+                    nextCommands[index] = new RaycastCommand();
+                    return;
+                }
+
+                var currentLayer = 3;
+                if (colliderToLayerMap.TryGetValue(hit.colliderInstanceID, out var currentFoundLayer))
+                    currentLayer = currentFoundLayer;
+                var material = layerData[currentLayer];
+
+                var seed = randomSeed + (uint)index;
+                var randomizer = new Unity.Mathematics.Random(seed == 0 ? 1 : seed);
+
                 if (randomizer.NextFloat() > material.transmissionChance)
                 {
-                    // --- REFLECTION ---
+                    // REFLECTION
+                    rayEnergies[index] *= bounceEnergyLossMultiplier; // Apply normal bounce loss
+
                     var reflectDir = Vector3.Reflect(prevCmd.direction, hit.normal);
                     nextCommands[index] = new RaycastCommand(
                         hit.point + hit.normal * 0.02f,
@@ -407,16 +482,16 @@ namespace RaytracedAudioVisualizerPlugin
                 }
                 else
                 {
-                    // --- PENETRATION (Prepare Backcast) ---
-                    // We step forward through the object, and point the ray backwards to find the exit hole
+                    // PENETRATION (Setup Backcast)
                     var backcastOrigin = hit.point + prevCmd.direction * maxThickness;
-
                     nextCommands[index] = new RaycastCommand(
                         backcastOrigin,
                         -prevCmd.direction,
                         queryParams,
                         maxThickness
                     );
+
+                    rayStates[index] = RayState.ResolvingPenetration; // Change state!
                 }
             }
         }

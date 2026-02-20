@@ -224,7 +224,7 @@ Transform:
   m_GameObject: {fileID: 36671189}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: -0.7071068, z: 0, w: 0.7071068}
-  m_LocalPosition: {x: 15, y: 2, z: 0}
+  m_LocalPosition: {x: 14.97, y: 2, z: -0}
   m_LocalScale: {x: 30, y: 4, z: 0.5}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1984,8 +1984,40 @@ PrefabInstance:
     m_TransformParent: {fileID: 162178608}
     m_Modifications:
     - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
+      propertyPath: rayCount
+      value: 200
+      objectReference: {fileID: 0}
+    - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
+      propertyPath: maxBounces
+      value: 3
+      objectReference: {fileID: 0}
+    - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
+      propertyPath: showDebugGizmos
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
       propertyPath: obstacleMask.m_Bits
       value: 8
+      objectReference: {fileID: 0}
+    - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
+      propertyPath: layerConfigs.Array.size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
+      propertyPath: bounceEnergyLossMultiplier
+      value: 0.806
+      objectReference: {fileID: 0}
+    - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
+      propertyPath: layerConfigs.Array.data[0].layerIndex
+      value: 3
+      objectReference: {fileID: 0}
+    - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
+      propertyPath: layerConfigs.Array.data[0].attenuationPerUnit
+      value: 1.5
+      objectReference: {fileID: 0}
+    - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
+      propertyPath: layerConfigs.Array.data[0].transmissionChance
+      value: 0.503
       objectReference: {fileID: 0}
     - target: {fileID: 7576389196345457306, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
       propertyPath: m_Name
