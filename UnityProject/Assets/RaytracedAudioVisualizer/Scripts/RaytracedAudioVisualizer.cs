@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Unity.Collections;
+using Unity.Jobs;
 using UnityEngine;
 using Random = UnityEngine.Random;
 
@@ -23,16 +24,22 @@ namespace RaytracedAudioVisualizerPlugin
         [SerializeField] private int maxDotCapacity = 20000;
 
         [Header("Debug")] [SerializeField] private bool showDebugGizmos = true;
-        private readonly uint[] _args = new uint[5] { 0, 0, 0, 0, 0 };
 
-        private readonly List<DebugLine> _debugLines = new();
+        [Header("Acoustics")] [SerializeField] private float maxExpectedWallThickness = 2.0f;
+
+        [SerializeField] private List<LayerAcousticConfig> layerConfigs = new();
+        private readonly uint[] _args = new uint[5] { 0, 0, 0, 0, 0 };
         private ComputeBuffer _argsBuffer;
         private int _bufferHeadIndex;
+
+        private readonly List<DebugLine> _debugLines = new();
 
         private ComputeBuffer _dotBuffer;
 
         private Material _instancedMaterial;
         private DotData[] _localDataBuffer;
+
+        private NativeArray<LayerAcousticData> _nativeLayerData;
 
         private NativeArray<RaycastCommand> _probeCommands;
         private NativeArray<RaycastHit> _probeResults;
@@ -57,6 +64,7 @@ namespace RaytracedAudioVisualizerPlugin
             _argsBuffer?.Release();
             if (_probeCommands.IsCreated) _probeCommands.Dispose();
             if (_probeResults.IsCreated) _probeResults.Dispose();
+            if (_nativeLayerData.IsCreated) _nativeLayerData.Dispose();
             if (_instancedMaterial) Destroy(_instancedMaterial);
         }
 
@@ -83,6 +91,18 @@ namespace RaytracedAudioVisualizerPlugin
 
             _probeCommands = new NativeArray<RaycastCommand>(rayCount, Allocator.Persistent);
             _probeResults = new NativeArray<RaycastHit>(rayCount, Allocator.Persistent);
+
+            _nativeLayerData = new NativeArray<LayerAcousticData>(32, Allocator.Persistent);
+
+            for (var i = 0; i < 32; i++)
+                _nativeLayerData[i] = new LayerAcousticData { transmissionChance = 0f, attenuation = 0f };
+
+            foreach (var config in layerConfigs)
+                _nativeLayerData[config.layerIndex] = new LayerAcousticData
+                {
+                    transmissionChance = config.transmissionChance,
+                    attenuation = config.attenuationPerUnit
+                };
         }
 
         private void InitializeMaterial()
@@ -294,6 +314,19 @@ namespace RaytracedAudioVisualizerPlugin
                 new Bounds(Vector3.zero, Vector3.one * 10000), _argsBuffer);
         }
 
+        [Serializable]
+        public struct LayerAcousticConfig
+        {
+            [Tooltip("The Unity Layer this configuration applies to.")] [Range(0, 31)]
+            public int layerIndex;
+
+            [Tooltip("0 = Total Reflection (Solid Wall), 1 = Total Transmission (Air/Ghost)")] [Range(0f, 1f)]
+            public float transmissionChance;
+
+            [Tooltip("Energy lost per unit of thickness when passing through this material.")]
+            public float attenuationPerUnit;
+        }
+
         private struct DebugLine
         {
             public Vector3 start;
@@ -319,6 +352,73 @@ namespace RaytracedAudioVisualizerPlugin
             public Vector3 position;
             public Vector4 color;
             public float range;
+        }
+
+        public struct LayerAcousticData
+        {
+            public float transmissionChance;
+            public float attenuation;
+        }
+
+        public struct ProcessBounceJob : IJobParallelFor
+        {
+            [ReadOnly] public NativeArray<RaycastHit> previousHits;
+            [ReadOnly] public NativeArray<RaycastCommand> previousCommands;
+            [ReadOnly] public NativeArray<LayerAcousticData> layerData;
+
+            public Unity.Mathematics.Random randomizer;
+            public float maxThickness;
+
+            public QueryParameters queryParams;
+
+            [WriteOnly] public NativeArray<RaycastCommand> nextCommands;
+
+            public void Execute(int index)
+            {
+                var hit = previousHits[index];
+                var prevCmd = previousCommands[index];
+
+                if (hit.colliderInstanceID == 0) // Did not hit anything
+                {
+                    nextCommands[index] = new RaycastCommand();
+                    return;
+                }
+
+                // 1. Look up the acoustic properties for the layer we just hit
+                var layer = 0; // Note: In a real implementation, you need a way to pass the layer. 
+                // Since RaycastHit in jobs doesn't easily expose the layer directly without a collider reference, 
+                // you might need to map colliderInstanceIDs to layers via a concurrent dictionary, 
+                // OR use a unified layer for obstacles and vary properties by a different metric.
+                // For simplicity, assuming we got the layer index:
+
+                var material = layerData[layer];
+
+                // 2. Stochastic Decision: Reflect or Penetrate?
+                if (randomizer.NextFloat() > material.transmissionChance)
+                {
+                    // --- REFLECTION ---
+                    var reflectDir = Vector3.Reflect(prevCmd.direction, hit.normal);
+                    nextCommands[index] = new RaycastCommand(
+                        hit.point + hit.normal * 0.02f,
+                        reflectDir,
+                        queryParams,
+                        prevCmd.distance - hit.distance
+                    );
+                }
+                else
+                {
+                    // --- PENETRATION (Prepare Backcast) ---
+                    // We step forward through the object, and point the ray backwards to find the exit hole
+                    var backcastOrigin = hit.point + prevCmd.direction * maxThickness;
+
+                    nextCommands[index] = new RaycastCommand(
+                        backcastOrigin,
+                        -prevCmd.direction,
+                        queryParams,
+                        maxThickness
+                    );
+                }
+            }
         }
     }
 }
