@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Unity.Collections;
-using Unity.Jobs;
 using UnityEngine;
 using Random = UnityEngine.Random;
 
@@ -24,46 +23,19 @@ namespace RaytracedAudioVisualizerPlugin
         [SerializeField] private int maxDotCapacity = 20000;
 
         [Header("Debug")] [SerializeField] private bool showDebugGizmos = true;
+        private readonly uint[] _args = new uint[5] { 0, 0, 0, 0, 0 };
 
-        private struct DebugLine
-        {
-            public Vector3 start;
-            public Vector3 end;
-            public Color color;
-        }
-
-        private List<DebugLine> _debugLines = new List<DebugLine>();
-
-        private struct DotData
-        {
-            public Vector3 position;
-            public float padding1;
-            public Vector3 normal;
-            public float padding2;
-            public Vector4 color;
-            public float startTime;
-            public float energy;
-            public float intensity;
-            public float padding4;
-        }
-
-        private struct ActiveSource
-        {
-            public Vector3 position;
-            public Vector4 color;
-            public float range;
-        }
+        private readonly List<DebugLine> _debugLines = new();
+        private ComputeBuffer _argsBuffer;
+        private int _bufferHeadIndex;
 
         private ComputeBuffer _dotBuffer;
-        private ComputeBuffer _argsBuffer;
-        private readonly uint[] _args = new uint[5] { 0, 0, 0, 0, 0 };
+
+        private Material _instancedMaterial;
         private DotData[] _localDataBuffer;
-        private int _bufferHeadIndex = 0;
 
         private NativeArray<RaycastCommand> _probeCommands;
         private NativeArray<RaycastHit> _probeResults;
-
-        private Material _instancedMaterial;
 
         private void Awake()
         {
@@ -71,14 +43,42 @@ namespace RaytracedAudioVisualizerPlugin
             InitializeMaterial();
         }
 
+        private void Update()
+        {
+            var activeSources = CollectAudioSources();
+            if (activeSources.Count > 0) SimulateRays(activeSources);
+
+            RenderDots();
+        }
+
+        private void OnDestroy()
+        {
+            _dotBuffer?.Release();
+            _argsBuffer?.Release();
+            if (_probeCommands.IsCreated) _probeCommands.Dispose();
+            if (_probeResults.IsCreated) _probeResults.Dispose();
+            if (_instancedMaterial) Destroy(_instancedMaterial);
+        }
+
+        private void OnDrawGizmos()
+        {
+            if (!showDebugGizmos || _debugLines == null) return;
+
+            foreach (var line in _debugLines)
+            {
+                Gizmos.color = line.color;
+                Gizmos.DrawLine(line.start, line.end);
+            }
+        }
+
         private void InitializeBuffers()
         {
-            int stride = Marshal.SizeOf(typeof(DotData));
+            var stride = Marshal.SizeOf(typeof(DotData));
             _dotBuffer = new ComputeBuffer(maxDotCapacity, stride, ComputeBufferType.Default);
             _argsBuffer = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
             _localDataBuffer = new DotData[maxDotCapacity];
 
-            for (int i = 0; i < maxDotCapacity; i++) _localDataBuffer[i].startTime = -999f;
+            for (var i = 0; i < maxDotCapacity; i++) _localDataBuffer[i].startTime = -999f;
             _dotBuffer.SetData(_localDataBuffer);
 
             _probeCommands = new NativeArray<RaycastCommand>(rayCount, Allocator.Persistent);
@@ -92,17 +92,6 @@ namespace RaytracedAudioVisualizerPlugin
             _instancedMaterial.EnableKeyword("PROCEDURAL_INSTANCING_ON");
         }
 
-        private void Update()
-        {
-            var activeSources = CollectAudioSources();
-            if (activeSources.Count > 0)
-            {
-                SimulateRays(activeSources);
-            }
-
-            RenderDots();
-        }
-
         private List<ActiveSource> CollectAudioSources()
         {
             var sources = new List<ActiveSource>();
@@ -112,11 +101,11 @@ namespace RaytracedAudioVisualizerPlugin
             {
                 if (!audioSource.isPlaying) continue;
 
-                float dist = Vector3.Distance(transform.position, audioSource.transform.position);
+                var dist = Vector3.Distance(transform.position, audioSource.transform.position);
                 if (dist > scanRadius || dist > audioSource.maxDistance) continue;
 
                 Color finalColor;
-                float intensity = 1.0f;
+                var intensity = 1.0f;
 
                 if (audioSource.TryGetComponent<AudioSourceColor>(out var colorComp))
                 {
@@ -125,7 +114,7 @@ namespace RaytracedAudioVisualizerPlugin
                 }
                 else
                 {
-                    float hue = Mathf.Repeat(audioSource.GetInstanceID() * 0.1f, 1f);
+                    var hue = Mathf.Repeat(audioSource.GetInstanceID() * 0.1f, 1f);
                     finalColor = Color.HSVToRGB(hue, 1f, 1f);
                 }
 
@@ -135,8 +124,6 @@ namespace RaytracedAudioVisualizerPlugin
                     range = audioSource.maxDistance,
                     color = finalColor
                 });
-
-
             }
 
             return sources;
@@ -145,21 +132,21 @@ namespace RaytracedAudioVisualizerPlugin
         private void SimulateRays(List<ActiveSource> sources)
         {
             if (showDebugGizmos) _debugLines.Clear();
-            QueryParameters queryParams = QueryParameters.Default;
+            var queryParams = QueryParameters.Default;
             queryParams.layerMask = obstacleMask;
             queryParams.hitTriggers = QueryTriggerInteraction.Ignore;
 
             var stepCommands = new List<NativeArray<RaycastCommand>>();
             var stepResults = new List<NativeArray<RaycastHit>>();
 
-            for (int depth = 0; depth <= maxBounces; depth++)
+            for (var depth = 0; depth <= maxBounces; depth++)
             {
                 NativeArray<RaycastCommand> commands;
                 NativeArray<RaycastHit> results;
 
                 if (depth == 0)
                 {
-                    for (int i = 0; i < rayCount; i++)
+                    for (var i = 0; i < rayCount; i++)
                     {
                         var dir = Random.onUnitSphere;
 
@@ -175,12 +162,12 @@ namespace RaytracedAudioVisualizerPlugin
                     commands = new NativeArray<RaycastCommand>(rayCount, Allocator.TempJob);
                     results = new NativeArray<RaycastHit>(rayCount, Allocator.TempJob);
 
-                    NativeArray<RaycastHit> prevResults = stepResults[depth - 1];
-                    NativeArray<RaycastCommand> prevCommands = stepCommands[depth - 1];
+                    var prevResults = stepResults[depth - 1];
+                    var prevCommands = stepCommands[depth - 1];
 
-                    for (int i = 0; i < rayCount; i++)
+                    for (var i = 0; i < rayCount; i++)
                     {
-                        RaycastHit hit = prevResults[i];
+                        var hit = prevResults[i];
 
                         if (hit.collider == null)
                         {
@@ -188,10 +175,10 @@ namespace RaytracedAudioVisualizerPlugin
                             continue;
                         }
 
-                        Vector3 incomingDir = prevCommands[i].direction;
-                        Vector3 reflectDir = Vector3.Reflect(incomingDir, hit.normal);
+                        var incomingDir = prevCommands[i].direction;
+                        var reflectDir = Vector3.Reflect(incomingDir, hit.normal);
 
-                        float remainingDist = prevCommands[i].distance - hit.distance;
+                        var remainingDist = prevCommands[i].distance - hit.distance;
                         if (remainingDist <= 0.01f)
                         {
                             commands[i] = new RaycastCommand();
@@ -207,32 +194,32 @@ namespace RaytracedAudioVisualizerPlugin
                     }
                 }
 
-                JobHandle handle = RaycastCommand.ScheduleBatch(commands, results, 32, default);
+                var handle = RaycastCommand.ScheduleBatch(commands, results, 32);
                 handle.Complete();
 
                 stepCommands.Add(commands);
                 stepResults.Add(results);
             }
 
-            int uploadCount = 0;
-            int startIndex = _bufferHeadIndex;
+            var uploadCount = 0;
+            var startIndex = _bufferHeadIndex;
 
-            for (int d = 0; d < stepResults.Count; d++)
+            for (var d = 0; d < stepResults.Count; d++)
             {
-                NativeArray<RaycastHit> results = stepResults[d];
-                Color debugColor = Color.Lerp(Color.green, new Color(0.5f, 0f, 1f), d / (float)(d + 1));
+                var results = stepResults[d];
+                var debugColor = Color.Lerp(Color.green, new Color(0.5f, 0f, 1f), d / (float)(d + 1));
 
-                for (int i = 0; i < rayCount; i++)
+                for (var i = 0; i < rayCount; i++)
                 {
-                    RaycastHit hit = results[i];
-                    ActiveSource src = sources[i % sources.Count];
+                    var hit = results[i];
+                    var src = sources[i % sources.Count];
 
                     if (!hit.collider) continue;
 
                     if (showDebugGizmos)
                     {
-                        Vector3 prevPoint =
-                            (d == 0) ? sources[i % sources.Count].position : stepResults[d - 1][i].point;
+                        var prevPoint =
+                            d == 0 ? sources[i % sources.Count].position : stepResults[d - 1][i].point;
                         _debugLines.Add(new DebugLine
                         {
                             start = prevPoint,
@@ -266,12 +253,11 @@ namespace RaytracedAudioVisualizerPlugin
 
             UploadBufferData(startIndex, uploadCount);
 
-            for (int d = 1; d < stepCommands.Count; d++)
+            for (var d = 1; d < stepCommands.Count; d++)
             {
                 if (stepCommands[d].IsCreated) stepCommands[d].Dispose();
                 if (stepResults[d].IsCreated) stepResults[d].Dispose();
             }
-
         }
 
         private void UploadBufferData(int startIndex, int count)
@@ -284,8 +270,8 @@ namespace RaytracedAudioVisualizerPlugin
             }
             else
             {
-                int firstBlock = maxDotCapacity - startIndex;
-                int secondBlock = count - firstBlock;
+                var firstBlock = maxDotCapacity - startIndex;
+                var secondBlock = count - firstBlock;
                 _dotBuffer.SetData(_localDataBuffer, startIndex, startIndex, firstBlock);
                 _dotBuffer.SetData(_localDataBuffer, 0, 0, secondBlock);
             }
@@ -295,10 +281,10 @@ namespace RaytracedAudioVisualizerPlugin
         {
             if (!dotMesh || !_instancedMaterial) return;
 
-            _args[0] = (uint)dotMesh.GetIndexCount(0);
+            _args[0] = dotMesh.GetIndexCount(0);
             _args[1] = (uint)maxDotCapacity;
-            _args[2] = (uint)dotMesh.GetIndexStart(0);
-            _args[3] = (uint)dotMesh.GetBaseVertex(0);
+            _args[2] = dotMesh.GetIndexStart(0);
+            _args[3] = dotMesh.GetBaseVertex(0);
             _argsBuffer.SetData(_args);
 
             _instancedMaterial.SetBuffer("_DotBuffer", _dotBuffer);
@@ -308,24 +294,31 @@ namespace RaytracedAudioVisualizerPlugin
                 new Bounds(Vector3.zero, Vector3.one * 10000), _argsBuffer);
         }
 
-        private void OnDrawGizmos()
+        private struct DebugLine
         {
-            if (!showDebugGizmos || _debugLines == null) return;
-
-            foreach (var line in _debugLines)
-            {
-                Gizmos.color = line.color;
-                Gizmos.DrawLine(line.start, line.end);
-            }
+            public Vector3 start;
+            public Vector3 end;
+            public Color color;
         }
 
-        private void OnDestroy()
+        private struct DotData
         {
-            _dotBuffer?.Release();
-            _argsBuffer?.Release();
-            if (_probeCommands.IsCreated) _probeCommands.Dispose();
-            if (_probeResults.IsCreated) _probeResults.Dispose();
-            if (_instancedMaterial) Destroy(_instancedMaterial);
+            public Vector3 position;
+            public float padding1;
+            public Vector3 normal;
+            public float padding2;
+            public Vector4 color;
+            public float startTime;
+            public float energy;
+            public float intensity;
+            public float padding4;
+        }
+
+        private struct ActiveSource
+        {
+            public Vector3 position;
+            public Vector4 color;
+            public float range;
         }
     }
 }
