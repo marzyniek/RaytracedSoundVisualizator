@@ -1985,7 +1985,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
       propertyPath: rayCount
-      value: 200
+      value: 100
       objectReference: {fileID: 0}
     - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
       propertyPath: maxBounces
@@ -1998,6 +1998,10 @@ PrefabInstance:
     - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
       propertyPath: obstacleMask.m_Bits
       value: 8
+      objectReference: {fileID: 0}
+    - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
+      propertyPath: airAttenuationPerUnit
+      value: 0.05
       objectReference: {fileID: 0}
     - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
       propertyPath: layerConfigs.Array.size
@@ -2017,7 +2021,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 1573714781554384523, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
       propertyPath: layerConfigs.Array.data[0].transmissionChance
-      value: 0.503
+      value: 0.467
       objectReference: {fileID: 0}
     - target: {fileID: 7576389196345457306, guid: 9ec2b04e76395c044bed6f467529fb34, type: 3}
       propertyPath: m_Name

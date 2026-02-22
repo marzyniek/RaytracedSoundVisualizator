@@ -35,12 +35,19 @@ namespace RaytracedAudioVisualizerPlugin
 
         [Header("Acoustics")] [SerializeField] private float maxExpectedWallThickness = 2.0f;
 
+        [SerializeField] private float minEnergyThreshold = 0.01f;
+
+        [Tooltip("Energy lost per unit of distance traveled through the air.")] [SerializeField]
+        private float airAttenuationPerUnit = 0.005f;
+
         [SerializeField] private List<LayerAcousticConfig> layerConfigs = new();
         private readonly uint[] _args = new uint[5] { 0, 0, 0, 0, 0 };
 
         private readonly List<DebugLine> _debugLines = new();
         private ComputeBuffer _argsBuffer;
         private int _bufferHeadIndex;
+
+        private AudioListener _currentListener;
 
         private ComputeBuffer _dotBuffer;
 
@@ -94,6 +101,14 @@ namespace RaytracedAudioVisualizerPlugin
             }
         }
 
+        private Vector3 GetListenerPosition()
+        {
+            if (_currentListener == null) _currentListener = FindFirstObjectByType<AudioListener>();
+
+            // Fallback to transform.position if no listener exists in the scene
+            return _currentListener != null ? _currentListener.transform.position : transform.position;
+        }
+
         private void InitializeBuffers()
         {
             var stride = Marshal.SizeOf(typeof(DotData));
@@ -139,7 +154,7 @@ namespace RaytracedAudioVisualizerPlugin
             {
                 if (!audioSource.isPlaying) continue;
 
-                var dist = Vector3.Distance(transform.position, audioSource.transform.position);
+                var dist = Vector3.Distance(GetListenerPosition(), audioSource.transform.position);
                 if (dist > scanRadius || dist > audioSource.maxDistance) continue;
 
                 Color finalColor;
@@ -229,6 +244,8 @@ namespace RaytracedAudioVisualizerPlugin
                         colliderToLayerMap = colliderToLayerMap,
                         randomSeed = (uint)(Random.Range(1, 100000) + depth * 100),
                         maxThickness = maxExpectedWallThickness,
+                        minEnergyThreshold = minEnergyThreshold,
+                        airAttenuation = airAttenuationPerUnit,
                         queryParams = queryParams,
                         bounceEnergyLossMultiplier = bounceEnergyLossMultiplier,
                         nextCommands = commands,
@@ -270,7 +287,10 @@ namespace RaytracedAudioVisualizerPlugin
                     var cmd = commands[i];
                     var src = sources[i % sources.Count];
 
-                    if (showDebugGizmos && state != RayState.Dead && energy > 0.01f)
+                    if (state == RayState.Forward && hit.collider)
+                        energy -= hit.distance * airAttenuationPerUnit;
+
+                    if (showDebugGizmos && state != RayState.Dead && energy > minEnergyThreshold)
                     {
                         var prevPoint = d == 0 ? src.position : stepResults[d - 1][i].point;
 
@@ -293,10 +313,18 @@ namespace RaytracedAudioVisualizerPlugin
 
                     var displayNormal = hit.normal;
 
-                    if (!hit.collider || state == RayState.Dead || energy <= 0.05f) continue;
+                    if (!hit.collider || state == RayState.Dead || energy <= minEnergyThreshold) continue;
 
-                    var intensity = Mathf.Clamp(1f - Vector3.Distance(src.position, transform.position) / src.range,
-                        0.1f, 1f);
+                    var intensity = Mathf.Clamp(1f - Vector3.Distance(src.position, GetListenerPosition()) / src.range,
+                        0.0f, 1f);
+
+                    if (i % 30 == 0)
+                    {
+                        Debug.Log("" + intensity + ", " + src.range + ", " +
+                                  Vector3.Distance(src.position, GetListenerPosition()));
+
+                        Debug.Log(GetListenerPosition());
+                    }
 
                     _localDataBuffer[_bufferHeadIndex] = new DotData
                     {
@@ -422,6 +450,8 @@ namespace RaytracedAudioVisualizerPlugin
 
             public uint randomSeed;
             public float maxThickness;
+            public float airAttenuation;
+            public float minEnergyThreshold;
             public QueryParameters queryParams;
             public float bounceEnergyLossMultiplier;
 
@@ -446,6 +476,19 @@ namespace RaytracedAudioVisualizerPlugin
                 var hit = previousHits[index];
                 var prevCmd = previousCommands[index];
 
+                if (state == RayState.Forward && hit.colliderInstanceID != 0) energy -= hit.distance * airAttenuation;
+
+                if (energy <= minEnergyThreshold)
+                {
+                    nextStates[index] = RayState.Dead;
+                    nextEnergies[index] = 0f;
+                    nextCommands[index] = new RaycastCommand();
+                    return;
+                }
+
+                nextStates[index] = state;
+                nextEnergies[index] = energy;
+
                 if (state == RayState.ResolvingPenetration)
                 {
                     if (hit.colliderInstanceID != 0)
@@ -458,7 +501,7 @@ namespace RaytracedAudioVisualizerPlugin
                         energy -= thickness * layerData[layer].attenuation;
                         nextEnergies[index] = energy;
 
-                        if (energy <= 0.05f)
+                        if (energy <= minEnergyThreshold)
                         {
                             nextStates[index] = RayState.Dead;
                             nextCommands[index] = new RaycastCommand();
