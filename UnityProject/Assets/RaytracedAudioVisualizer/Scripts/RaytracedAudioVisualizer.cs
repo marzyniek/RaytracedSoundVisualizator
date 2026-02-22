@@ -318,14 +318,6 @@ namespace RaytracedAudioVisualizerPlugin
                     var intensity = Mathf.Clamp(1f - Vector3.Distance(src.position, GetListenerPosition()) / src.range,
                         0.0f, 1f);
 
-                    if (i % 30 == 0)
-                    {
-                        Debug.Log("" + intensity + ", " + src.range + ", " +
-                                  Vector3.Distance(src.position, GetListenerPosition()));
-
-                        Debug.Log(GetListenerPosition());
-                    }
-
                     _localDataBuffer[_bufferHeadIndex] = new DotData
                     {
                         position = hit.point,
