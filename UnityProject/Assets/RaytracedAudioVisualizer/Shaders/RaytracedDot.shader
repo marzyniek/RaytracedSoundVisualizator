@@ -100,7 +100,7 @@ Shader "Custom/RaytracedDot"
 
                     finalColor = lerp(data.color, float4(data.color.rgb, 0.0), animT);
                     finalColor.a *= data.intensity;
-                    float scale = data.energy * 0.2 * liveliness; 
+                    float scale = data.energy * 0.35 * liveliness; 
 
                     float3 offsetPos = data.position + (data.normal * _Offset);
                     float4x4 mat = LookAtMatrix(offsetPos, -data.normal);

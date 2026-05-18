@@ -22,7 +22,7 @@ namespace RaytracedAudioVisualizerPlugin
         [SerializeField] private float scanRadius = 50f;
         [SerializeField] private float maxRayLength = 50f;
         [Range(1, 5000)] [SerializeField] private int rayCount = 1000;
-        [Range(0, 8)] [SerializeField] private int maxBounces = 2;
+        [Range(0, 30)] [SerializeField] private int maxBounces = 2;
         [Range(0f, 1f)] [SerializeField] private float bounceEnergyLossMultiplier = 0.8f;
 
         [Header("Visualization")] [SerializeField]
@@ -103,10 +103,10 @@ namespace RaytracedAudioVisualizerPlugin
 
         private Vector3 GetListenerPosition()
         {
-            if (_currentListener == null) _currentListener = FindFirstObjectByType<AudioListener>();
+            if (!_currentListener) _currentListener = FindFirstObjectByType<AudioListener>();
 
             // Fallback to transform.position if no listener exists in the scene
-            return _currentListener != null ? _currentListener.transform.position : transform.position;
+            return _currentListener ? _currentListener.transform.position : transform.position;
         }
 
         private void InitializeBuffers()
@@ -316,7 +316,7 @@ namespace RaytracedAudioVisualizerPlugin
                     if (!hit.collider || state == RayState.Dead || energy <= minEnergyThreshold) continue;
 
                     var intensity = Mathf.Clamp(1f - Vector3.Distance(src.position, GetListenerPosition()) / src.range,
-                        0.0f, 1f);
+                        0.5f, 1f);
 
                     _localDataBuffer[_bufferHeadIndex] = new DotData
                     {

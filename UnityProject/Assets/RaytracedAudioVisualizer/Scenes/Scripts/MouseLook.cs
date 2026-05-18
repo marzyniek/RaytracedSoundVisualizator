@@ -7,7 +7,7 @@ public class MouseLook : MonoBehaviour
 {
     // Sensitivity for mouse movement (degrees per second)
     [Header("Speeds")]
-    [SerializeField] private float mouseSensitivity = 100f;
+    [SerializeField] private float mouseSensitivity = 2f;
 
     // Minimum pitch angle (looking down) in degrees
     [Header("Pitch Limits (°)")]
@@ -32,9 +32,12 @@ public class MouseLook : MonoBehaviour
     /// </summary>
     private void Update()
     {
+        if (StudyGameManager.Instance != null && StudyGameManager.Instance.IsPaused) return;
+
         // Read mouse movement deltas
-        float mX = Input.GetAxis("Mouse X") * mouseSensitivity * Time.deltaTime;
-        float mY = Input.GetAxis("Mouse Y") * mouseSensitivity * Time.deltaTime;
+        float currentSensitivity = StudyGameManager.Instance != null ? StudyGameManager.Instance.MouseSensitivity : mouseSensitivity;
+        float mX = Input.GetAxis("Mouse X") * currentSensitivity;
+        float mY = Input.GetAxis("Mouse Y") * currentSensitivity;
 
         // Rotate the player body around the Y axis (yaw)
         playerBody.Rotate(Vector3.up * mX);

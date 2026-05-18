@@ -1,122 +1,491 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+using RaytracedAudioVisualizerPlugin;
+
+[System.Serializable]
+public class StudyRoute
+{
+    public string routeName;
+    public Transform playerSpawnPoint;
+    public StudyNode targetNode; 
+}
 
 public class StudyGameManager : MonoBehaviour
 {
-    [Header("Prefabs")] [SerializeField] private GameObject playerPrefab;
+    public static StudyGameManager Instance { get; private set; }
 
+    public enum StudyMode { SoundOnly, VisualOnly, SoundAndVisual }
+
+    [Header("Study Info")]
+    [SerializeField] private string participantID = "P01";
+    
+    [SerializeField] 
+    private int latinSquareGroup = 0; 
+
+    [Header("Prefabs & Routes")] 
+    [SerializeField] private GameObject playerPrefab;
     [SerializeField] private GameObject npcPrefab;
 
-    [Header("Spawn Locations")] [SerializeField]
-    private Transform[] playerSpawnPoints;
+    [SerializeField] private List<StudyRoute> predefinedRoutes;
+    [SerializeField] private List<StudyRoute> introRoutes;
 
-    [SerializeField] private Transform[] npcSpawnPoints;
+    [Header("UI Elements")]
+    [SerializeField] private GameObject startPanel;
+    [SerializeField] private GameObject gamePanel;
+    [SerializeField] private GameObject endPanel;
+    [SerializeField] private GameObject countdownPanel;
+    [SerializeField] private GameObject questionnairePanel;
+    [SerializeField] private GameObject pausePanel;
+    [SerializeField] private Slider sensitivitySlider;
+    [SerializeField] private TextMeshProUGUI trialCounterText;
+    [SerializeField] private TextMeshProUGUI countdownText;
+    [SerializeField] private TextMeshProUGUI conditionText;
+    [SerializeField] private TextMeshProUGUI volumeText;
 
-    [Header("Study Settings")] [SerializeField]
-    private int totalTrials = 5;
+    [Header("Audio Settings")]
+    [SerializeField] private float volumeStep = 0.05f;
 
-    [SerializeField] private float successRadius = 2.0f; // How close player needs to get to NPC
-    [SerializeField] private string participantID = "P01";
-    private GameObject currentNPC;
-
-    // Instance tracking
+    [Header("Mouse Settings")]
+    [SerializeField] private float mouseSensitivity = 2f;
+    public float MouseSensitivity => mouseSensitivity;
+    
     private GameObject currentPlayer;
-
-    // State tracking
-    private int currentTrial;
+    private GameObject currentNPC;
+    private int currentTrialGlobal = 0; 
     private bool isTrialActive;
+    public bool IsPaused { get; private set; }
     private Vector3 lastPlayerPosition;
 
-    // File path for data logging
-    private string logFilePath;
+    private string trialsLogPath;
+    private string nodesLogPath;
     private float totalDistanceWalked;
-
-    private List<int> trialOrder = new();
     private float trialTimer;
+
+    private List<StudyMode> conditionOrder = new();
+    private List<StudyRoute> currentConditionRoutes = new();
+    private StudyMode currentState;
+    private StudyRoute currentRoute;
+    private int conditionIndex = 0;
+    private int routeIndexWithinCondition = 0;
+    
+    private bool isInIntro = true;
+    private int introRouteIndex = 0;
+
+    private StudyNode currentNode;
+    private float nodeEnterTime;
+
+    private enum StudyState { WaitingToStart, CountingDown, Playing, Finished, WaitingForQuestionnaire }
+    private StudyState currentStudyState = StudyState.WaitingToStart;
+    
+    private void Awake()
+    {
+        if (Instance == null) Instance = this;
+        else Destroy(gameObject);
+    }
 
     private void Start()
     {
-        // Setup the CSV file path in the project folder
-        logFilePath = Application.dataPath + "/" + participantID + "_Results.csv";
-
-        trialOrder = Enumerable.Range(0, totalTrials).ToList();
-
-        for (var i = 0; i < trialOrder.Count; i++)
+        startPanel.SetActive(true);
+        gamePanel.SetActive(false);
+        endPanel.SetActive(false);
+        countdownPanel.SetActive(false);
+        if (questionnairePanel != null) questionnairePanel.SetActive(false);
+        if (pausePanel != null) pausePanel.SetActive(false);
+        
+        isInIntro = introRoutes != null && introRoutes.Count > 0;
+        
+        AudioListener.volume = 0.5f;
+        
+        // Load mouse sensitivity
+        mouseSensitivity = PlayerPrefs.GetFloat("MouseSensitivity", 2f);
+        if (sensitivitySlider != null)
         {
-            var temp = trialOrder[i];
-            var randomIndex = Random.Range(i, trialOrder.Count);
-            trialOrder[i] = trialOrder[randomIndex];
-            trialOrder[randomIndex] = temp;
+            sensitivitySlider.value = mouseSensitivity;
+            sensitivitySlider.onValueChanged.AddListener(OnSensitivitySliderChanged);
         }
 
-        if (!File.Exists(logFilePath)) File.AppendAllText(logFilePath, "Trial,SpawnIndex,Time(s),DistanceWalked(m)\n");
+        SetupLogging();
+        SetupLatinSquare();
+        PrepareNextCondition();
+    }
 
-        StartNextTrial();
+    public void OnSensitivitySliderChanged(float value)
+    {
+        SetMouseSensitivity(value);
+    }
+
+    public void SetMouseSensitivity(float value)
+    {
+        mouseSensitivity = value;
+        PlayerPrefs.SetFloat("MouseSensitivity", mouseSensitivity);
+        PlayerPrefs.Save();
+    }
+
+    private void SetupLogging()
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // --- WEBGL: Print Headers to Console ---
+        Debug.Log("--- WEBGL LOGGING INITIALIZED ---");
+        Debug.Log("Trials CSV Header: Participant,Mode,Route,GlobalTrial,Time(s),DistanceWalked(m)");
+        Debug.Log("Nodes CSV Header: Participant,Mode,Route,GlobalTrial,NodeID,IsDecisionNode,EnterTime(s),LeaveTime(s),TimeSpentInNode(s)");
+#else
+        // --- DESKTOP/EDITOR: Create Physical Files ---
+        trialsLogPath = Application.dataPath + $"/{participantID}_Results_Trials.csv";
+        nodesLogPath = Application.dataPath + $"/{participantID}_Results_Nodes.csv";
+
+        if (!File.Exists(trialsLogPath)) 
+            File.AppendAllText(trialsLogPath, "Participant,Mode,Route,GlobalTrial,Time(s),DistanceWalked(m)\n");
+
+        if (!File.Exists(nodesLogPath)) 
+            File.AppendAllText(nodesLogPath, "Participant,Mode,Route,GlobalTrial,NodeID,IsDecisionNode,EnterTime(s),LeaveTime(s),TimeSpentInNode(s)\n");
+#endif
+    }
+
+    private void SetupLatinSquare()
+    {
+        if (latinSquareGroup == 0) conditionOrder = new List<StudyMode> { StudyMode.SoundOnly, StudyMode.VisualOnly, StudyMode.SoundAndVisual };
+        else if (latinSquareGroup == 1) conditionOrder = new List<StudyMode> { StudyMode.VisualOnly, StudyMode.SoundAndVisual, StudyMode.SoundOnly };
+        else conditionOrder = new List<StudyMode> { StudyMode.SoundAndVisual, StudyMode.SoundOnly, StudyMode.VisualOnly };
+    }
+
+    private void PrepareNextCondition()
+    {
+        if (conditionIndex >= conditionOrder.Count)
+        {
+            EndStudy();
+            return;
+        }
+
+        currentState = conditionOrder[conditionIndex];
+        routeIndexWithinCondition = 0;
+
+        currentConditionRoutes = new List<StudyRoute>(predefinedRoutes);
+        for (int i = 0; i < currentConditionRoutes.Count; i++)
+        {
+            StudyRoute temp = currentConditionRoutes[i];
+            int randomIndex = Random.Range(i, currentConditionRoutes.Count);
+            currentConditionRoutes[i] = currentConditionRoutes[randomIndex];
+            currentConditionRoutes[randomIndex] = temp;
+        }
     }
 
     private void Update()
     {
-        if (!isTrialActive || currentPlayer == null || currentNPC == null) return;
+        if (volumeText != null)
+        {
+            volumeText.text = $"Volume: {AudioListener.volume:P0}";
+        }
 
-        // 1. Update Time
-        trialTimer += Time.deltaTime;
+        if (Input.GetKeyDown(KeyCode.Tab))
+        {
+            TogglePause();
+        }
 
-        // 2. Track Distance Walked
-        var distanceThisFrame = Vector3.Distance(currentPlayer.transform.position, lastPlayerPosition);
-        totalDistanceWalked += distanceThisFrame;
-        lastPlayerPosition = currentPlayer.transform.position;
+        if (IsPaused) return;
 
-        // 3. Check Win Condition (Did player reach the NPC?)
-        var distanceToNPC = Vector3.Distance(currentPlayer.transform.position, currentNPC.transform.position);
-        if (distanceToNPC <= successRadius) EndTrial();
+        HandleVolumeControl();
+
+        if (currentStudyState == StudyState.WaitingToStart && Input.GetKeyDown(KeyCode.Space))
+        {
+            startPanel.SetActive(false);
+            StartCoroutine(RunCountdownThenStart());
+        }
+
+        if (currentStudyState == StudyState.WaitingForQuestionnaire && Input.GetKeyDown(KeyCode.Space))
+        {
+            if (questionnairePanel != null) questionnairePanel.SetActive(false);
+            
+            conditionIndex++;
+            PrepareNextCondition();
+
+            if (currentStudyState != StudyState.Finished)
+            {
+                currentStudyState = StudyState.WaitingToStart;
+                startPanel.SetActive(true);
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+            }
+        }
+
+        if (currentStudyState == StudyState.Playing && isTrialActive && currentPlayer != null)
+        {
+            trialTimer += Time.deltaTime;
+            float distanceThisFrame = Vector3.Distance(currentPlayer.transform.position, lastPlayerPosition);
+            totalDistanceWalked += distanceThisFrame;
+            lastPlayerPosition = currentPlayer.transform.position;
+        }
+    }
+
+    private void HandleVolumeControl()
+    {
+        float scroll = Input.GetAxis("Mouse ScrollWheel");
+        if (Mathf.Abs(scroll) > 0.01f && currentState != StudyMode.VisualOnly )
+        {
+            // Only allow volume changes if we are NOT in VisualOnly mode, 
+            // OR if we are in VisualOnly mode but want to allow the user to override (usually study constraints prefer 0 here).
+            // For now, we allow adjustment but note that StartNextTrial sets it back to 0 if it's VisualOnly.
+            
+            float newVolume = AudioListener.volume + (scroll > 0 ? volumeStep : -volumeStep);
+            AudioListener.volume = Mathf.Clamp01(newVolume);
+            
+            Debug.Log($"[StudyGameManager] Volume adjusted: {AudioListener.volume:P0}");
+        }
+    }
+
+    public void TogglePause()
+    {
+        if (currentStudyState == StudyState.Finished) return;
+
+        IsPaused = !IsPaused;
+        Time.timeScale = IsPaused ? 0f : 1f;
+        AudioListener.pause = IsPaused;
+
+        Debug.Log($"[StudyGameManager] TogglePause: IsPaused={IsPaused}, TimeScale={Time.timeScale}");
+
+        if (pausePanel != null) pausePanel.SetActive(IsPaused);
+        if (gamePanel != null) gamePanel.SetActive(!IsPaused);
+
+        if (IsPaused)
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            Debug.Log("[StudyGameManager] Cursor Unlocked");
+        }
+        else
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            Debug.Log("[StudyGameManager] Cursor Locked");
+        }
+    }
+
+    public void SetStudyMode(int modeIndex)
+    {
+        Debug.Log($"[StudyGameManager] SetStudyMode called with index: {modeIndex}");
+        currentState = (StudyMode)modeIndex;
+        if (IsPaused) TogglePause();
+        RestartTrial();
+    }
+
+    public void ContinueFromQuestionnaire()
+    {
+        if (currentStudyState != StudyState.WaitingForQuestionnaire) return;
+
+        if (questionnairePanel != null) questionnairePanel.SetActive(false);
+    
+        conditionIndex++;
+        PrepareNextCondition();
+
+        if (currentStudyState != StudyState.Finished)
+        {
+            currentStudyState = StudyState.WaitingToStart;
+            startPanel.SetActive(true);
+     
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+    }
+
+    public void RestartTrial()
+    {
+        Debug.Log("[StudyGameManager] Restarting Trial...");
+        if (currentPlayer != null) Destroy(currentPlayer);
+        if (currentNPC != null) Destroy(currentNPC);
+        isTrialActive = false;
+        StopAllCoroutines();
+        StartCoroutine(RunCountdownThenStart());
     }
 
     private void StartNextTrial()
     {
-        if (currentTrial >= totalTrials)
-        {
-            Debug.Log("Study Complete for " + participantID + "!");
-            return;
-        }
-
         trialTimer = 0f;
         totalDistanceWalked = 0f;
+        currentNode = null;
+        currentStudyState = StudyState.Playing;
+        
+        if (isInIntro)
+        {
+            currentRoute = introRoutes[introRouteIndex];
+            currentState = StudyMode.SoundAndVisual;
+            trialCounterText.text = $"Intro: {introRouteIndex + 1} / {introRoutes.Count}";
+        }
+        else
+        {
+            currentRoute = currentConditionRoutes[routeIndexWithinCondition];
+            trialCounterText.text = $"Trial: {currentTrialGlobal + 1} / {conditionOrder.Count * predefinedRoutes.Count}";
+        }
 
-        // Pick random spawn points (or you could make this sequential)
-        Debug.Log($"Trial {trialOrder[currentTrial]} Started");
-        var pSpawn = playerSpawnPoints[trialOrder[currentTrial]];
-        var nSpawn = npcSpawnPoints[trialOrder[currentTrial]];
+        if(conditionText != null) conditionText.text = $"Mode: {currentState}";
 
-        // Spawn instances
-        currentPlayer = Instantiate(playerPrefab, pSpawn.position, pSpawn.rotation);
-        currentNPC = Instantiate(npcPrefab, nSpawn.position, nSpawn.rotation);
-
+        if (currentPlayer != null) Destroy(currentPlayer);
+        currentPlayer = Instantiate(playerPrefab, currentRoute.playerSpawnPoint.position + new Vector3(0, 0.5f, 0), currentRoute.playerSpawnPoint.rotation);
         lastPlayerPosition = currentPlayer.transform.position;
-        isTrialActive = true;
 
-        Debug.Log($"--- Trial {currentTrial} Started ---");
+        // Apply Mode Settings
+        var visualizer = currentPlayer.GetComponentInChildren<RaytracedAudioVisualizer>();
+        if (visualizer != null)
+        {
+            visualizer.enabled = (currentState == StudyMode.VisualOnly || currentState == StudyMode.SoundAndVisual);
+        }
+
+        // Only mute if we are in VisualOnly mode. 
+        // Otherwise, keep the current volume (which defaults to 0.5f and can be adjusted by the user).
+        if (currentState == StudyMode.VisualOnly)
+        {
+            AudioListener.volume = 0.0f;
+        }
+        else if (AudioListener.volume <= 0.001f)
+        {
+            // If it was muted (e.g. from a previous VisualOnly trial), reset it to a default audible level.
+            AudioListener.volume = 0.5f;
+        }
+
+        if (currentNPC != null) Destroy(currentNPC);
+        if (npcPrefab != null && currentRoute.targetNode != null)
+        {
+            currentNPC = Instantiate(npcPrefab, currentRoute.targetNode.transform.position + new Vector3(0, 3.70f, 0), Quaternion.identity);
+            currentNPC.transform.rotation = currentRoute.targetNode.transform.rotation;
+        }
+        
+        isTrialActive = true;
+    }
+    public void LogNodeEnter(StudyNode node)
+    {
+        if (!isTrialActive) return;
+
+        currentNode = node;
+        nodeEnterTime = trialTimer;
+
+        if (node == currentRoute.targetNode)
+        {
+            EndTrial();
+        }
+    }
+
+    public void LogNodeExit(StudyNode node)
+    {
+        if (!isTrialActive || currentNode != node) return;
+
+        float leaveTime = trialTimer;
+        float timeSpent = leaveTime - nodeEnterTime;
+
+        if (!isInIntro)
+        {
+            string nodeData = $"{participantID},{currentState},{currentRoute.routeName},{currentTrialGlobal},{node.nodeID},{node.isDecisionNode},{nodeEnterTime.ToString("F2", CultureInfo.InvariantCulture)},{leaveTime.ToString("F2", CultureInfo.InvariantCulture)},{timeSpent.ToString("F2", CultureInfo.InvariantCulture)}\n";
+        
+#if UNITY_WEBGL && !UNITY_EDITOR
+            // TrimEnd removes the extra newline so the console output looks cleaner
+            Debug.Log("[NODE DATA] " + nodeData.TrimEnd('\n')); 
+#else
+            File.AppendAllText(nodesLogPath, nodeData);
+#endif
+        }
+        
+        currentNode = null;
     }
 
     private void EndTrial()
     {
         isTrialActive = false;
 
-        // Log Data to CSV
-        var dataRow =
-            $"{currentTrial},{trialOrder[currentTrial]},{trialTimer.ToString("F2", CultureInfo.InvariantCulture)},{totalDistanceWalked.ToString("F2", CultureInfo.InvariantCulture)}\n";
-        File.AppendAllText(logFilePath, dataRow);
+        if (!isInIntro)
+        {
+            string trialData = $"{participantID},{currentState},{currentRoute.routeName},{currentTrialGlobal},{trialTimer.ToString("F2", CultureInfo.InvariantCulture)},{totalDistanceWalked.ToString("F2", CultureInfo.InvariantCulture)}\n";
+        
+#if UNITY_WEBGL && !UNITY_EDITOR
+            // TrimEnd removes the extra newline so the console output looks cleaner
+            Debug.Log("[TRIAL DATA] " + trialData.TrimEnd('\n'));
+#else
+            File.AppendAllText(trialsLogPath, trialData);
+#endif
+        }
 
-        Debug.Log($"Trial {currentTrial} Finished! Time: {trialTimer:F2}s | Distance: {totalDistanceWalked:F2}m");
+        if (currentPlayer != null) Destroy(currentPlayer);
+        if (currentNPC != null) Destroy(currentNPC);
 
-        // Clean up for the next round
-        Destroy(currentPlayer);
-        Destroy(currentNPC);
+        if (isInIntro)
+        {
+            introRouteIndex++;
+            if (introRouteIndex >= introRoutes.Count)
+            {
+                isInIntro = false;
+                // Ensure the state is set correctly for the first real condition
+                if (conditionIndex < conditionOrder.Count)
+                {
+                    currentState = conditionOrder[conditionIndex];
+                }
+                
+                currentStudyState = StudyState.WaitingToStart;
+                startPanel.SetActive(true);
+                gamePanel.SetActive(false);
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+            }
+            else
+            {
+                StartCoroutine(RunCountdownThenStart());
+            }
+            return;
+        }
 
-        // Optional: Add a short delay here before starting the next trial
-        currentTrial++;
+        currentTrialGlobal++;
+        routeIndexWithinCondition++;
+
+        if (routeIndexWithinCondition >= currentConditionRoutes.Count)
+        {
+            ShowQuestionnaire();
+            return;
+        }
+
+        if (currentStudyState != StudyState.Finished)
+        {
+            StartCoroutine(RunCountdownThenStart());
+        }
+    }
+
+    private void ShowQuestionnaire()
+    {
+        currentStudyState = StudyState.WaitingForQuestionnaire;
+        if (questionnairePanel != null) questionnairePanel.SetActive(true);
+        startPanel.SetActive(false);
+        gamePanel.SetActive(false);
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    private void EndStudy()
+    {
+        Debug.Log($"Study Complete for {participantID}!");
+        currentStudyState = StudyState.Finished;
+        gamePanel.SetActive(false);
+        endPanel.SetActive(true);
+        AudioListener.volume = 1.0f;
+        
+        // Unlock cursor for the end screen
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+    
+    private IEnumerator RunCountdownThenStart()
+    {
+        currentStudyState = StudyState.CountingDown;
+        gamePanel.SetActive(false);
+        countdownPanel.SetActive(true);
+
+        for (int i = 3; i > 0; i--)
+        {
+            countdownText.text = i.ToString();
+            yield return new WaitForSeconds(1f);
+        }
+
+        countdownPanel.SetActive(false);
+        gamePanel.SetActive(true);
         StartNextTrial();
     }
 }

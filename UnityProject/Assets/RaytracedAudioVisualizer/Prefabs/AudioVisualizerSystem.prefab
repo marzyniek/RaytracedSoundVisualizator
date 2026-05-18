@@ -47,11 +47,16 @@ MonoBehaviour:
   obstacleMask:
     serializedVersion: 2
     m_Bits: 4294967295
-  scanRadius: 50
+  scanRadius: 60
+  maxRayLength: 50
   rayCount: 100
-  maxBounces: 3
-  bounceEnergyLossMultiplier: 0.8
+  maxBounces: 8
+  bounceEnergyLossMultiplier: 0.85
   dotMesh: {fileID: 10210, guid: 0000000000000000e000000000000000, type: 0}
   dotMaterial: {fileID: 2100000, guid: 97cd5c3823eab5e41a93d2c52e426f01, type: 2}
   maxDotCapacity: 200000
   showDebugGizmos: 0
+  maxExpectedWallThickness: 2
+  minEnergyThreshold: 0.01
+  airAttenuationPerUnit: 0.005
+  layerConfigs: []
