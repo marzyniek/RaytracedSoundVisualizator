@@ -813,3 +813,7 @@ P01,SoundAndVisual,T1,5,B,True,6.06,6.72,0.66
 P01,SoundAndVisual,T2,0,B,True,0.00,3.10,3.10
 P01,SoundAndVisual,T2,0,C,True,4.06,4.96,0.90
 P01,SoundAndVisual,T2,0,D,True,6.10,7.02,0.92
+P01,SoundAndVisual,T6,0,L,True,0.00,0.46,0.46
+P01,SoundAndVisual,T6,0,G,True,2.08,2.96,0.88
+P01,SoundAndVisual,T6,0,J,True,4.70,5.64,0.94
+P01,SoundAndVisual,T6,0,D,True,6.70,7.40,0.70
